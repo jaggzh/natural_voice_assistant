@@ -23,8 +23,6 @@ def find_supported_audio_format(audio, device_index, verbose):
     if verbose:
         print(f"Checking for supported rates: {supported_rates}")
     for rate in supported_rates:
-        if verbose:
-            print(f"  {rate}")
         try:
             if audio.is_format_supported(rate,
                                          input_device=device_index,
@@ -39,8 +37,6 @@ def find_supported_audio_format(audio, device_index, verbose):
         print('')
         print(f"Checking for supported channel counts: {supported_channels}")
     for channels in supported_channels:
-        if verbose:
-            print(f"  {channels}")
         try:
             if audio.is_format_supported(found_rate,
                                          input_device=device_index,
@@ -68,16 +64,13 @@ def list_pyaudio_devices(audio):
         dev = audio.get_device_info_by_index(i)
         print((i,dev['name'],dev['maxInputChannels']))
 
-def record(audio, audio_buffer, start_recording, input_device_index, verbose) :
+def record(audio, rate, channels, audio_buffer, start_recording, input_device_index, verbose) :
     """Record an audio stream from the microphone in a separate process  
         Args:
             audio_buffer: multiprocessing queue to store the recorded audio data
             start_recording: multiprocessing value to start and stop the recording
     """
     CHUNK = 2048
-
-    # get supported sample rate and number of channels for the given device
-    rate, channels = find_supported_audio_format(audio, input_device_index, verbose)
 
     # Open audio input stream
     if verbose:
@@ -127,7 +120,7 @@ def flush():
   torch.cuda.empty_cache()
   torch.cuda.reset_peak_memory_stats()
 
-def main_loop(audio, streaming_buffer, model, audio_input_buffer, audio_output_buffer,  start_recording, input_device_index):
+def main_loop(audio, sample_rate, streaming_buffer, model, audio_input_buffer, audio_output_buffer,  start_recording, input_device_index):
     """Wait for audio input, call voice assistant model and play synthesized speech  
         Args:
             streaming_buffer: streaming buffer instance to store preprocessed audio chunks
@@ -145,9 +138,6 @@ def main_loop(audio, streaming_buffer, model, audio_input_buffer, audio_output_b
 
     # control buffer stream id for first chunk 
     first = True
-
-    # get sample rate of input device:
-    sample_rate,_ = find_supported_audio_format(audio, input_device_index)
 
     # start main loop
     while True:
@@ -215,55 +205,60 @@ def main_loop(audio, streaming_buffer, model, audio_input_buffer, audio_output_b
         
         time.sleep(0.001) # TODO Is this really needed?
                 
-def main():
-    """ Start processes for recording and audio output, initialize voice assist model and start main loop 
+def start_other_processes(sample_rate, audio_channels, audio_buffer, audio_output_buffer, start_recording, audio_device_idx, device):
     """
+    Initializes and starts all other processes except for the recording.
+    This function runs in a separate process.
+    """
+    # Initialize buffer for processed audio input
+    streaming_buffer = StreamBuffer(chunk_size=16, shift_size=16)
 
-    # parse arguments
+    # Initialize your speech-to-text, language model, text-to-speech (STT-LLM-TTS) pipeline
+    model = STT_LLM_TTS(device=device)
+
+    # Start multiprocess for sound output
+    play_audio_process = multiprocessing.Process(target=play_audio, args=(audio_output_buffer,))
+    play_audio_process.start()
+
+    # Start the main loop for processing
+    main_loop(None, sample_rate, streaming_buffer, model, audio_buffer, audio_output_buffer, start_recording, audio_device_idx)
+
+def main():
+    """Start the recording process in the main thread and all other processes in a separate process."""
+    multiprocessing.set_start_method('spawn', force=True)
+
+    # Parse arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--audio-device-idx', type=int, default=0, help='Index of the audio device for recording')
     parser.add_argument('--audio-details', action='store_true', help='Display audio device info verbosely')
-    parser.add_argument('--audio-debug', action='store_true', help='Run record() in main thread for debugging; this cannot be used for normal operation!')
     args = parser.parse_args()
 
     list_pyaudio_devices(pyaudio.PyAudio())
     print(f"\nCurrently input device with id {args.audio_device_idx} is used for recording. To change the audio device, please use the --audio-device-idx parameter.\n")
 
-    # !! Make sure to start multiprocessing before using any pytorch tensors to prevent GPU memory problems !! 
-    # start multiprocesses for sound input
-    audio_buffer = multiprocessing.Queue() 
-    start_recording = multiprocessing.Value('i', 0)
-    audio = pyaudio.PyAudio()
-    if args.audio_debug:
-        print("WARNING: record() in debug mode. CTRL-C to quit.")
-        record(audio, audio_buffer,start_recording, args.audio_device_idx, args.audio_details)
-        # We likely only got here if the audio device failed
-        print("Exiting early due to --audio-debug selected")
-        sys.exit()
-    record_process = multiprocessing.Process(target=record, args=(audio, audio_buffer,start_recording, args.audio_device_idx, args.audio_details))
-    record_process.start()
-
-    # start multiprocesses for sound output
+    # Start multiprocessing queues and values
+    audio_buffer = multiprocessing.Queue()
     audio_output_buffer = multiprocessing.Queue()
-    play_audio_process = multiprocessing.Process(target=play_audio, args=(audio_output_buffer,))
-    play_audio_process.start()
+    start_recording = multiprocessing.Value('i', 0)
 
-    # initialize buffer for processed audio input
-    streaming_buffer = StreamBuffer(chunk_size=16, shift_size=16)
+    # Initialize PyAudio in the main thread for recording
+    audio = pyaudio.PyAudio()
+    # get supported sample rate and number of channels for the given device
+    sample_rate, audio_channels = find_supported_audio_format(audio, args.audio_device_idx, args.audio_details)
 
-    # get device
-    if torch.cuda.is_available():
-        device = 'cuda'
-        # flush GPU memory
-        flush()
-    else:
-        device = 'cpu'
-        
-    # init STT-LLM-TTS pipeline
-    model = STT_LLM_TTS(device=device)
 
-    # start inference
-    main_loop(audio, streaming_buffer, model, audio_buffer, audio_output_buffer,  start_recording, args.audio_device_idx)
-   
+    # Determine processing device
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    if device == 'cuda':
+        flush()  # Flush GPU memory if necessary
+
+    # Start other processes in a separate process
+    other_processes = multiprocessing.Process(target=start_other_processes, args=(sample_rate, audio_channels, audio_buffer, audio_output_buffer, start_recording, args.audio_device_idx, device))
+    other_processes.start()
+
+    record(audio, sample_rate, audio_channels, audio_buffer, start_recording, args.audio_device_idx, args.audio_details)
+
+    other_processes.join()  # Wait for the other processes to finish (optional, based on your program's needs)
+
 if __name__ == "__main__":
     main()
