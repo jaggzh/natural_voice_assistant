@@ -73,13 +73,8 @@ def record(audio, rate, channels, audio_buffer, start_recording, input_device_in
     CHUNK = 2048
 
     # Open audio input stream
-    if verbose:
-        print(f"Attempting to use audio index {input_device_index}")
-        print(f'  rate: {rate}')
-        print(f'  ch: {channels}')
-        print(f'  fmt: {pyaudio.paFloat32}')
-        print(f'  idx: {input_device_index}')
-        print(f'  frames per buffer: {CHUNK}')
+    print(f"record(): Attempting to use audio index {input_device_index}")
+    print(f'  Sample rate:{rate}, Channels:{channels}, Format: {pyaudio.paFloat32}, Frames/buffer: {CHUNK}')
     streamIn = audio.open(format=pyaudio.paFloat32, channels=channels,
                             rate=rate, input=True, input_device_index=input_device_index,
                             frames_per_buffer=CHUNK)
