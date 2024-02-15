@@ -73,13 +73,8 @@ def record(audio, rate, channels, audio_buffer, start_recording, input_device_in
     CHUNK = 2048
 
     # Open audio input stream
-    if verbose:
-        print(f"Attempting to use audio index {input_device_index}")
-        print(f'  rate: {rate}')
-        print(f'  ch: {channels}')
-        print(f'  fmt: {pyaudio.paFloat32}')
-        print(f'  idx: {input_device_index}')
-        print(f'  frames per buffer: {CHUNK}')
+    print(f"record(): Attempting to use audio index {input_device_index}")
+    print(f'  Sample rate:{rate}, Channels:{channels}, Format: {pyaudio.paFloat32}, Frames/buffer: {CHUNK}')
     streamIn = audio.open(format=pyaudio.paFloat32, channels=channels,
                             rate=rate, input=True, input_device_index=input_device_index,
                             frames_per_buffer=CHUNK)
@@ -129,9 +124,15 @@ def main_loop(audio, sample_rate, streaming_buffer, model, audio_input_buffer, a
             audio_output_buffer: multiprocessing queue for audio output
             start_recording: multiprocessing value to start recording of audio chunks
     """
-    # init preprocessor and streaming iterator
+    # init preprocessor
     preprocessor = Preprocessor()
+    
+    # Initialize buffer for processed audio input
+    streaming_buffer = StreamBuffer(chunk_size=16, shift_size=16)
     streaming_buffer_iter = iter(streaming_buffer)
+
+    # Initialize speech-to-text, language model, text-to-speech (STT-LLM-TTS) pipeline
+    model = STT_LLM_TTS(device=device)
     
     # send signal to recording process to start the recording
     start_recording.value = 1
@@ -245,7 +246,6 @@ def main():
     audio = pyaudio.PyAudio()
     # get supported sample rate and number of channels for the given device
     sample_rate, audio_channels = find_supported_audio_format(audio, args.audio_device_idx, args.audio_details)
-
 
     # Determine processing device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
