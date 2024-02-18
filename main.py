@@ -21,6 +21,7 @@ def find_supported_audio_format(audio, device_index, verbose):
     found_channels = None
 
     if verbose:
+        print(f"Audio device index: {device_index}")
         print(f"Checking for supported rates: {supported_rates}")
     for rate in supported_rates:
         try:
@@ -230,7 +231,7 @@ def main():
 
     # Parse arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('--audio-device-idx', type=int, default=0, help='Index of the audio device for recording')
+    parser.add_argument('--audio-device-idx', type=int, default=None, help='Index of the audio device for recording')
     parser.add_argument('--audio-details', action='store_true', help='Display audio device info verbosely')
     args = parser.parse_args()
 
@@ -245,6 +246,8 @@ def main():
     # Initialize PyAudio in the main thread for recording
     audio = pyaudio.PyAudio()
     # get supported sample rate and number of channels for the given device
+    foo=audio.get_default_input_device_info()
+    import ipdb; ipdb.set_trace(context=16); pass
     sample_rate, audio_channels = find_supported_audio_format(audio, args.audio_device_idx, args.audio_details)
 
     # Determine processing device
